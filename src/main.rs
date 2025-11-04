@@ -169,19 +169,20 @@ fn main() {
                         }
                         let position =
                             (vec2(app.mouse.x, app.mouse.y) / model.zoom - model.offset) / SCALE;
-                        if let Some((index, joint)) = model
-                            .structure
-                            .joints
-                            .iter()
-                            .enumerate()
-                            .min_by_key(|(_, joint)| joint.distance_squared(position).ord())
-                        {
-                            draw.text(&index.to_string())
-                                .no_line_wrap()
-                                .font_size((FORCE_SCALE * 1000.) as u32)
-                                .xy((*joint * SCALE).to_array().into());
-                        }
-                        for joint in &model.structure.joints {
+                        let closest_joint =
+                            (!model.egui.ctx().is_pointer_over_area())
+                                .then_some(())
+                                .and_then(|()| {
+                                    model.structure.joints.iter().enumerate().min_by_key(
+                                        |(_, joint)| joint.distance_squared(position).ord(),
+                                    )
+                                });
+                        for (index, joint) in model.structure.joints.iter().enumerate() {
+                            if let Some((closest_index, _)) = closest_joint
+                                && index == closest_index
+                            {
+                                continue;
+                            }
                             draw.ellipse()
                                 .color(JOINT_COLOR)
                                 .radius(0.02 * SCALE)
@@ -320,6 +321,12 @@ fn main() {
                                     .to_array()
                                     .into());
                             }
+                        }
+                        if let Some((index, joint)) = closest_joint {
+                            draw.text(&index.to_string())
+                                .no_line_wrap()
+                                .font_size((FORCE_SCALE * 1000.) as u32)
+                                .xy((*joint * SCALE).to_array().into());
                         }
                         draw.to_frame(app, &frame).unwrap();
                         model.egui.draw_to_frame(&frame).unwrap();
