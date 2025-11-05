@@ -8,7 +8,9 @@
 
 use core::panic;
 use std::{
+    env::args,
     f32::consts::{FRAC_PI_3, FRAC_PI_6},
+    fs::File,
     mem::copy,
 };
 
@@ -17,7 +19,7 @@ use itertools::{Itertools, chain, izip};
 use nannou::{
     app,
     color::{BLACK, BLUE, GREY, LIME, ORANGE, RED, WHITE, encoding::Srgb},
-    event::{ElementState, MouseButton, MouseScrollDelta},
+    event::{ElementState, Key, MouseButton, MouseScrollDelta},
     prelude::rgb::Rgb,
     winit::event::WindowEvent,
 };
@@ -25,6 +27,7 @@ use nannou_egui::{
     Egui,
     egui::{self, Area, Color32, ComboBox, DragValue, Frame, Grid, Ui, epaint::util::FloatOrd},
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SCALE: f32 = 1000.;
@@ -41,33 +44,17 @@ const JOINT_COLOR: Rgb<Srgb, u8> = WHITE;
 
 fn main() {
     app(|app| {
-        let structure = Structure {
-            joints: vec![
-                vec2(-1., 0.),
-                vec2(0., 0.),
-                vec2(1., 0.),
-                vec2(-0.5, 3_f32.sqrt() / 2.),
-                vec2(0.5, 3_f32.sqrt() / 2.),
-            ],
-            members: vec![(0, 1), (1, 2), (0, 3), (1, 3), (1, 4), (2, 4), (3, 4)],
-            loads: vec![
-                Load::new(1, vec2(0., -30.)),
-                Load::new(3, vec2(0., -300.)),
-                Load::new(4, vec2(0., -120.)),
-            ],
-            supports: vec![
-                Support::new(0, SupportKind::Pin),
-                Support::new(2, SupportKind::Roller { normal: Vec2::Y }),
-            ],
-        };
+        let structure: Structure = args()
+            .nth(1)
+            .and_then(|path| serde_json::from_reader(File::open(path).unwrap()).ok())
+            .unwrap_or_default();
+        app.set_exit_on_escape(false);
         let egui = Egui::from_window(
             &app.window(
                 app.new_window()
                     .raw_event(|app, model: &mut Model, event| {
                         model.egui.handle_raw_event(event);
-                        if model.egui.ctx().is_pointer_over_area() {
-                            return;
-                        }
+
                         let previous = model.structure.clone();
                         match event {
                             WindowEvent::MouseWheel { delta, .. } => match delta {
@@ -83,6 +70,9 @@ fn main() {
                                 model.zoom *= 1. + *delta as f32;
                             }
                             WindowEvent::MouseInput { state, button, .. } => {
+                                 if model.egui.ctx().is_pointer_over_area() {
+                            return;
+                        }
                                 let position = (vec2(app.mouse.x, app.mouse.y) / model.zoom
                                     - model.offset)
                                     / SCALE;
@@ -124,9 +114,21 @@ fn main() {
                                     (ElementState::Released, MouseButton::Other(_)) => {}
                                 }
                             }
+                            WindowEvent::KeyboardInput { input, .. } => {
+                                if input.state == ElementState::Pressed
+                                    && input.virtual_keycode == Some(Key::Escape)
+                                {
+                                    model.egui.ctx().memory_mut(|memory| {
+                                        memory.data.remove::<ContextMenuTarget>(
+                                            "context_menu_target".into(),
+                                        );
+                                    });
+                                }
+                            }
                             _ => {}
                         }
                         if model.structure != previous {
+                            model.structure.save();
                             model.external_solution = model.structure.solve_externals();
                             model.internal_solution = model
                                 .external_solution
@@ -633,10 +635,12 @@ fn main() {
                     Frame::group(ui.style())
                         .fill(ui.style().visuals.window_fill())
                         .show(ui, menu)
+                        .response
                 });
         }
         ctx.end();
         if model.structure != previous {
+            model.structure.save();
             model.external_solution = model.structure.solve_externals();
             model.internal_solution = model
                 .external_solution
@@ -680,7 +684,7 @@ struct ExternalSolution {
     moments: Vec<(Vec2, f32)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 struct Support {
     index: usize,
     kind: SupportKind,
@@ -692,7 +696,7 @@ impl Support {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 struct Load {
     index: usize,
     vector: Vec2,
@@ -704,19 +708,28 @@ impl Load {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 enum SupportKind {
     Fixed,
     Roller { normal: Vec2 },
     Pin,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 struct Structure {
     joints: Vec<Vec2>,
     members: Vec<(usize, usize)>,
     loads: Vec<Load>,
     supports: Vec<Support>,
+}
+
+impl Structure {
+    fn save(&self) {
+        let Some(path) = args().nth(1) else {
+            return;
+        };
+        serde_json::to_writer(File::create(path).unwrap(), self).unwrap();
+    }
 }
 
 #[derive(Debug, Clone, Copy, Error)]
